@@ -1,4 +1,3 @@
-#include <Arduino.h>
 #include <string>
 #include <sstream>
 #include <cstdio>
@@ -11,18 +10,25 @@
 #include <thread>
 #include "esp_pthread.h"
 #include "ui.h"
+#include "timings.h"
+#include <Arduino.h>
+#include "wifidevice.h"
+#include <algorithm>
 
 #define EXAMPLE_ESP_WIFI_SSID "esp32-wifi"
 #define EXAMPLE_ESP_WIFI_PASS "AB54ADADNdfry832372DBNAORuBmacbe"
 #define EXAMPLE_ESP_WIFI_CHANNEL 5
 #define EXAMPLE_MAX_STA_CONN 6
 
-const auto CollectionTime = std::chrono::minutes(5);
-
-std::unordered_map<std::string, int> nearby_wifi_devices{};
+std::unordered_map<std::string, std::unique_ptr<WifiDevice>> nearby_wifi_devices{};
 std::mutex nearby_wifi_devices_mutex;
 
-UI ui;
+std::chrono::system_clock::time_point approx_next_collection;
+std::mutex nextCollection_mutex;
+
+std::thread p1;
+
+std::unique_ptr<UI> ui{new UI()};
 
 bool myesp_error_check(esp_err_t err)
 {
@@ -49,17 +55,38 @@ std::string mac_to_stdstring(uint8_t mac[])
   return out.str();
 }
 
-void processWifiDevices()
+bool is_old_device(std::unique_ptr<WifiDevice> &device)
+{
+  return (std::chrono::system_clock::now() - device->last_heard) > MaxDeviceAge;
+}
+
+void process_wifi_devices()
 {
   while (true)
   {
     nearby_wifi_devices_mutex.lock();
-    size_t devices = nearby_wifi_devices.size();
-    nearby_wifi_devices.clear();
+
+    // erase all the old devices
+    for (auto it = nearby_wifi_devices.begin(); it != nearby_wifi_devices.end();)
+    {
+      if (is_old_device(it->second))
+      {
+        it = nearby_wifi_devices.erase(it);
+      }
+      else
+      {
+        it++;
+      }
+    }
+
+    // update ui count
+    ui->setWifiDevices(nearby_wifi_devices.size());
+    ui->drawUI();
+
     nearby_wifi_devices_mutex.unlock();
 
-    Serial.print("Devices: ");
-    Serial.println(devices);
+    approx_next_collection = std::chrono::system_clock::now() + CollectionTime;
+
     std::this_thread::sleep_for(CollectionTime);
   }
 }
@@ -73,13 +100,16 @@ void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id
     message = message + event->rssi + " MAC: " + mac_to_string(event->mac);
     Serial.println(message.begin());
 
+    auto mac = mac_to_stdstring(event->mac);
+    auto now = std::chrono::system_clock::now();
+
     nearby_wifi_devices_mutex.lock();
-    nearby_wifi_devices.insert({mac_to_stdstring(event->mac), event->rssi});
+    nearby_wifi_devices.insert(std::make_pair(mac, std::unique_ptr<WifiDevice>{new WifiDevice(mac, now, event->rssi)}));
+    ui->setWifiDevices(nearby_wifi_devices.size());
+    ui->drawUI();
     nearby_wifi_devices_mutex.unlock();
   }
 }
-
-std::thread p1;
 
 void setup()
 {
@@ -89,9 +119,8 @@ void setup()
 
   // init display
   Heltec.display->init();
-  Heltec.display->setFont(ArialMT_Plain_10);
-  ui = UI{Heltec.display};
-  ui.drawUI();
+  ui->display = Heltec.display;
+  ui->drawUI();
 
   // wifi
   if (!myesp_error_check(esp_netif_init()))
@@ -133,11 +162,15 @@ void setup()
 
   auto cfg = esp_pthread_get_default_config();
   esp_pthread_set_cfg(&cfg);
-  p1 = std::thread{processWifiDevices};
+  p1 = std::thread{process_wifi_devices};
 }
-
-int num = 0;
 
 void loop()
 {
+  auto time = approx_next_collection - std::chrono::system_clock::now();
+  ui->setSecondsTillNextUpdate(std::chrono::duration_cast<std::chrono::seconds>(time));
+  uint32_t pin20Input = analogReadMilliVolts(1);
+  ui->setMVolts(pin20Input);
+  ui->drawUI();
+  delay(1000);
 }
