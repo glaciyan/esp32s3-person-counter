@@ -169,8 +169,8 @@ void loop()
 {
   auto time = approx_next_collection - std::chrono::system_clock::now();
   ui->setSecondsTillNextUpdate(std::chrono::duration_cast<std::chrono::seconds>(time));
-  uint32_t pin20Input = analogReadMilliVolts(1);
-  ui->setMVolts(pin20Input);
+  // uint32_t pin20Input = analogReadMilliVolts(1);
+  // ui->setMVolts(pin20Input);
   ui->drawUI();
   delay(1000);
 }

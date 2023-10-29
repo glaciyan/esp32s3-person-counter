@@ -70,7 +70,7 @@ void UI::drawUI()
 
     drawDevices();
     drawTimer();
-    drawBattery();
+    // drawBattery();
 
     display->display();
     ui_mutex.unlock();
